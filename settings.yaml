@@ -1,0 +1,103 @@
+# FIRE settings — thresholds and options. All editable.
+
+edgar:
+  # SEC EDGAR asks every caller to identify itself in the User-Agent header.
+  # Any "Name email" string is fine — change it to whatever you like.
+  user_agent: "FIRE Dashboard your-email@example.com"
+
+  # Institutional holders (zero-padded CIKs) we scan when building the
+  # 13F-derived institutional-holders card. EDGAR has no "holders of $T"
+  # endpoint, so we walk a curated list of the big managers' 13F-HR
+  # filings and pick out positions in each watchlist ticker. Add or
+  # remove to taste — more CIKs = slower per-ticker refresh.
+  thirteenf_holders:
+    - "0000102909"   # Vanguard Group
+    - "0001364742"   # BlackRock
+    - "0000093751"   # State Street
+    - "0000315066"   # Fidelity (FMR LLC)
+    - "0000884546"   # Capital Research Global Investors
+    - "0000895421"   # Morgan Stanley
+    - "0000019617"   # JPMorgan Chase
+    - "0000886982"   # Goldman Sachs Group
+    - "0001067983"   # Berkshire Hathaway
+    - "0001029160"   # T. Rowe Price
+
+valuation:
+  # PEG ratio: price/earnings relative to growth.
+  peg_cheap: 1.0      # PEG at or below this scores as cheap vs. growth
+  peg_rich: 2.5       # PEG at or above this scores as rich vs. growth
+  # Position within the 52-week price range (0 = at the low, 1 = at the high).
+  range_low: 0.25     # at/below this counts as "near lows"
+  range_high: 0.80    # at/above this counts as "near highs"
+  # Other valuation multiples — set here so the user can tune the lens.
+  pe_trailing_cheap: 15
+  pe_trailing_rich:  35
+  pe_forward_cheap:  15
+  pe_forward_rich:   30
+  ps_cheap:           4
+  ps_rich:           12
+  ev_ebitda_cheap:   10
+  ev_ebitda_rich:    25
+  fcf_yield_low:      2     # below this = "low" / "thin"
+  fcf_yield_high:     6     # above this = "high"
+
+# Quality / health / ownership tag thresholds. All optional; defaults match
+# the IMPLEMENTATION_PLAN.md "research starting points" levels.
+tags:
+  roe_elite:           30   # ROE % above this gets "elite"
+  roa_elite:           20
+  rev_yoy_top_decile:  50   # revenue YoY % above this gets "top decile"
+  rev_yoy_expanding:   15   # revenue YoY % above this gets "expanding"
+  margin_pp_change:     2   # |op margin YoY pp change| above this gets a tag
+  inst_crowded:        75   # institutional ownership % above this gets "crowded"
+  buyback_threshold:  -0.5  # share count YoY % below this gets "buyback"
+  dilution_threshold:  1.5  # share count YoY % above this gets "dilution"
+  iv_elevated:         40   # 30d realized vol % above this gets "elevated"
+  pcr_bullish:        0.70  # put/call below this gets "bullish"
+  pcr_bearish:        1.30  # put/call above this gets "bearish"
+  div_yield_token:    0.5   # dividend yield % below this gets "token"
+  div_yield_high:     3.0   # dividend yield % above this gets "high"
+
+# Minimum sentiment-data thresholds. The Sentiment card grays out below
+# these to signal the baseline can't be trusted yet.
+sentiment_min_baseline_days: 5
+
+earnings:
+  surprise_notable_pct: 5.0   # |EPS surprise| above this is flagged as notable
+  lookback_quarters: 12       # how many earnings rows to keep per ticker
+
+collector:
+  history_days: 400           # price history pulled for charts and ranges
+
+sentiment:
+  enabled: true               # set false to skip the sentiment pass
+
+  # Tone scorer:
+  #   vader   — pure-Python, ships in a tiny pip package (default)
+  #   finbert — finance-tuned transformer; needs `pip install transformers torch`
+  scorer: vader
+
+  # How far back each refresh looks for new posts (raw window).
+  ingest_window_days: 4
+
+  # Shift detection: a meaningful shift is one where the 3-day current
+  # mean differs from the 30-day baseline by more than this threshold.
+  baseline_days: 30
+  current_days: 3
+  shift_abs_floor: 0.15       # minimum |shift| to flag
+  shift_std_factor: 0.5       # OR shift > 0.5 * baseline_std, whichever is bigger
+
+  reddit:
+    user_agent: "FIRE-Dashboard/0.1"
+    per_sub_limit: 25
+    multi_ticker_subs:
+      - stocks
+      - investing
+      - wallstreetbets
+      - StockMarket
+      - ValueInvesting
+    single_ticker_subs:       # sub -> ticker; every post in the sub belongs to that ticker
+      intelstock: INTC
+      nok: NOK
+      uuu_stock: UUUU
+      usar_stock: USAR

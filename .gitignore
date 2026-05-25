@@ -1,0 +1,16 @@
+# Local data and secrets — never commit these
+.env
+data/
+briefs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.streamlit/secrets.toml
+
+# Editor / tooling
+.claude/
+.pytest_cache/
+.DS_Store

@@ -1,0 +1,21 @@
+# FIRE dashboard — Streamlit configuration.
+
+[theme]
+base = "dark"
+primaryColor = "#d4a04a"
+backgroundColor = "#0b0c0f"
+secondaryBackgroundColor = "#11131a"
+textColor = "#ece8d8"
+borderColor = "#232631"
+baseRadius = "0.15rem"
+font = "sans-serif"
+
+[server]
+# Serve on the home network so other devices (e.g. your phone) can reach it.
+# On the same Wi-Fi, open the "Network URL" the launcher prints.
+address = "0.0.0.0"
+port = 8501
+headless = false
+
+[browser]
+gatherUsageStats = false

@@ -1,0 +1,41 @@
+# FIRE watchlist — the AI value chain, grouped by layer.
+# Edit freely: add or remove tickers under any layer, or add new layers.
+# The dashboard and collector read this file on every run.
+#
+# Per-ticker "list" (holding / shortlist / watchlist) lives in the
+# local SQLite DB so you can edit it from the dashboard. The optional
+# `lists:` mapping at the bottom of this file is read only the first
+# time a ticker is seen — it lets you seed initial lists in one place.
+# After that, the dashboard is the source of truth.
+
+layers:
+  compute:
+    label: "Compute & Semiconductors"
+    tickers:
+      - NVDA
+      - AVGO
+      - MXL
+      - NOK
+      - MP
+      - FCX
+      - WOLF
+      - ENPH
+  systems:
+    label: "Systems & Networking"
+    tickers: []
+  hyperscalers:
+    label: "Hyperscalers & Big Tech"
+    tickers: []
+  power_cooling:
+    label: "Power, Cooling & Electrification"
+    tickers:
+      - SCCO
+      - USAR
+      - ETN
+      - UUUU
+  software:
+    label: "AI Software & Applications"
+    tickers: []
+
+lists:
+  NVDA: holding
