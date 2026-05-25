@@ -17,6 +17,7 @@ from .components import (_esc, render_activity_band, render_kpi_grid,
                          render_sentiment, render_thesis_card,
                          render_ticker_bar)
 from .list_picker import render_list_picker
+from .notes import render_notes_popover
 from .thesis_mock import build_mock_thesis
 
 try:
@@ -43,6 +44,7 @@ SECTION_NAV = [
     ("signals",   "Signals"),
     ("sentiment", "Sentiment"),
     ("fine",      "Fine print"),
+    ("sources",   "Sources"),
 ]
 
 
@@ -241,6 +243,137 @@ def _render_signals_section(ticker: str) -> None:
     )
 
 
+# --------------------------------------------------------------------------
+# Sources section (11) — every data source Claude was given, paired with
+# the exact lines from the prompt blob, plus the cache fingerprint of the
+# visible thesis. This is the anti-hallucination audit: if a number in the
+# executive summary doesn't appear in one of these expanded blocks, Claude
+# fabricated it.
+# --------------------------------------------------------------------------
+_SOURCES_CLAUDE_LINE = (
+    "Every data source fed into the thesis prompt. Each row expands to "
+    "show the exact text Claude was given. Empty rows mean Claude had "
+    "nothing for that category for this ticker — useful for spotting "
+    "any number in the executive summary it couldn't have derived from "
+    "data."
+)
+
+
+def _render_sources_section(ticker: str, snap: dict, sections: dict,
+                            sentiment: dict) -> None:
+    """Section 11 — Sources audit. Reads the same extras the thesis
+    builder uses, runs `gather_source_rows`, and renders one expandable
+    row per source. The expander content is the literal block Claude
+    received in its prompt."""
+    try:
+        from ..processors.thesis import gather_source_rows
+    except Exception:
+        st.html(
+            f'<section class="section" id="sec-sources">'
+            f'{render_section_header(11, "Sources", "what Claude saw", "Source-audit accessor unavailable.")}'
+            f'</section>'
+        )
+        return
+
+    extras = _load_thesis_extras(ticker)
+    try:
+        rows = gather_source_rows(snap, sections, sentiment, extras)
+    except Exception as exc:
+        st.html(
+            f'<section class="section" id="sec-sources">'
+            f'{render_section_header(11, "Sources", "what Claude saw", f"Failed to gather sources: {_esc(str(exc)[:200])}")}'
+            f'</section>'
+        )
+        return
+
+    # --- Cache fingerprint: the 3 thesis partials currently cached. ---
+    fp_parts: list = []
+    with db.connect() as conn:
+        for kind in ("thesis_core_v2", "thesis_deep_v2", "thesis_forward_v2"):
+            row = conn.execute(
+                """SELECT content_hash, created_at, cost_usd, latency_ms
+                   FROM claude_cache
+                   WHERE ticker = ? AND kind = ?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (ticker.upper(), kind),
+            ).fetchone()
+            if not row:
+                continue
+            ts = (row["created_at"] or "")[:16].replace("T", " ")
+            chash = (row["content_hash"] or "")[:8]
+            short_kind = kind.replace("thesis_", "").replace("_v2", "")
+            cost = row["cost_usd"]
+            cost_str = f" · ${cost:.2f}" if isinstance(cost, (int, float)) else ""
+            fp_parts.append(
+                f'<span class="fp-row">'
+                f'<span class="fp-kind">{_esc(short_kind)}</span>'
+                f'<span>{_esc(ts)}</span>'
+                f'<span class="fp-hash">#{_esc(chash)}</span>'
+                f'{_esc(cost_str)}'
+                f'</span>'
+            )
+
+    if fp_parts:
+        fp_html = (
+            '<div class="sources-fingerprint">'
+            + "".join(fp_parts)
+            + '</div>'
+        )
+    else:
+        fp_html = (
+            '<div class="sources-fingerprint">'
+            '<span class="fp-empty">'
+            'No thesis cached yet — run Generate Thesis to populate.'
+            '</span>'
+            '</div>'
+        )
+
+    # --- One <details> row per source. -------------------------------
+    row_parts: list = []
+    for r in rows:
+        status_icon = "✓" if r.present else "—"
+        status_cls = "ok" if r.present else "empty"
+        summary_cls = "src-summary" if r.present else "src-summary empty"
+
+        if r.raw_lines:
+            raw_text = "\n".join(r.raw_lines)
+            raw_inner = f'<pre>{_esc(raw_text)}</pre>'
+        else:
+            raw_inner = (
+                '<div class="empty-hint">'
+                'No data for this source — Claude was not given anything '
+                'from this category for this ticker.'
+                '</div>'
+            )
+
+        row_parts.append(
+            f'<details class="src-row">'
+            f'<summary>'
+            f'<span class="src-status {status_cls}">{status_icon}</span>'
+            f'<span class="src-label">'
+            f'<span class="lbl">{_esc(r.label)}</span>'
+            f'<span class="prov">{_esc(r.provider)}</span>'
+            f'</span>'
+            f'<span class="{summary_cls}">{_esc(r.summary)}</span>'
+            f'<span class="src-chev">▾</span>'
+            f'</summary>'
+            f'<div class="src-raw">{raw_inner}</div>'
+            f'</details>'
+        )
+
+    rows_html = (
+        '<div class="sources-list">' + "".join(row_parts) + '</div>'
+    )
+
+    st.html(
+        f'<section class="section" id="sec-sources">'
+        f'{render_section_header(11, "Sources", "what Claude saw · verify each number", _SOURCES_CLAUDE_LINE)}'
+        f'{fp_html}'
+        f'{rows_html}'
+        f'</section>'
+    )
+
+
 SECTION_CLAUDE_LINES = {
     "overview":  "Snapshot data straight from yfinance — sector, employees, "
                  "founder/CEO, beta, volume.",
@@ -284,6 +417,21 @@ SECTION_COL_GRID = {
 @st.cache_data(ttl=900, show_spinner=False)
 def _load(ticker: str) -> dict:
     return metrics.build_research_data(ticker)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _load_thesis_extras(ticker: str) -> dict:
+    """The same `extras` dict that `build_thesis()` feeds to Claude.
+    Cached so the Sources section doesn't trigger a fresh yfinance call
+    on every Research-tab rerun."""
+    try:
+        from ..processors.thesis import gather_extras
+    except Exception:
+        return {}
+    try:
+        return gather_extras(ticker)
+    except Exception:
+        return {}
 
 
 # --------------------------------------------------------------------------
@@ -589,18 +737,22 @@ def render_research(ticker: str) -> None:
     # single row so we don't burn vertical space on two near-empty
     # rows of UI chrome.
     is_running = bool(jobs.get(job_id))
-    ctrl_cols = st.columns([2, 3, 7])
+    ctrl_cols = st.columns([2, 2, 3, 5])
     with ctrl_cols[0]:
         with st.container(key="hero_picker"):
             render_list_picker(ticker, key_prefix="research_picker")
     with ctrl_cols[1]:
+        render_notes_popover(
+            ticker, key=f"notes_research_{ticker}", compact=False,
+        )
+    with ctrl_cols[2]:
         if is_running:
             _render_running_strip(ticker, job_id, thesis_state_key,
                                   thesis_meta_key, sections_state_key)
         else:
             _render_generate_button(ticker, job_id, thesis_state_key,
                                     sections_state_key, snap, sections, sentiment)
-    with ctrl_cols[2]:
+    with ctrl_cols[3]:
         # The explainer doubles as the button's tooltip; render a
         # compact version inline so the user sees cost/latency without
         # hovering. Hidden while a job is running — the Stop button
@@ -695,6 +847,10 @@ def render_research(ticker: str) -> None:
             f'{render_kpi_grid(fine, cols=4, section="fine")}'
             f'</section>'
         )
+
+    # Section 11 — Sources audit. Always renders so the user can see
+    # what Claude was given (or missing) for this ticker.
+    _render_sources_section(ticker, snap, sections, sentiment)
 
     with db.connect() as conn:
         activity = db.recent_claude_activity(conn, ticker=ticker, limit=6)

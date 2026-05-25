@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS watchlist_meta (
     ticker TEXT PRIMARY KEY,
     list TEXT NOT NULL,
     note TEXT,
+    note_updated_at TEXT,
     added_at TEXT,
     updated_at TEXT
 );
@@ -294,8 +295,25 @@ def init_db():
             pass
         _migrate_watchlist_meta(conn)
         conn.executescript(SCHEMA)
+        _migrate_watchlist_meta_columns(conn)
         _migrate_insider_form4_columns(conn)
         _seed_lists(conn)
+
+
+def _migrate_watchlist_meta_columns(conn):
+    """Additive: ensure note_updated_at exists on older databases.
+
+    The note column has been in the schema since v1 but went unused.
+    note_updated_at was added when the Notes popover shipped so the
+    note's freshness can be tracked independently of `updated_at`
+    (which is bumped by `set_list`)."""
+    cols = _table_columns(conn, "watchlist_meta")
+    if not cols:
+        return
+    if "note_updated_at" not in cols:
+        conn.execute(
+            "ALTER TABLE watchlist_meta ADD COLUMN note_updated_at TEXT"
+        )
 
 
 def _migrate_insider_form4_columns(conn):
@@ -539,6 +557,41 @@ def set_list(conn, ticker: str, list_name: str):
            ON CONFLICT(ticker) DO UPDATE SET list=excluded.list,
                                              updated_at=excluded.updated_at""",
         (ticker.upper(), list_name, now, now),
+    )
+
+
+def get_note(conn, ticker: str) -> dict:
+    """Return {"content": str, "updated_at": str|None} for the ticker.
+    A ticker with no row, or a NULL/empty note, returns an empty
+    content string — callers don't need to special-case missing rows."""
+    row = conn.execute(
+        "SELECT note, note_updated_at FROM watchlist_meta WHERE ticker = ?",
+        (ticker.upper(),),
+    ).fetchone()
+    if row is None:
+        return {"content": "", "updated_at": None}
+    return {
+        "content": row["note"] or "",
+        "updated_at": row["note_updated_at"] if (row["note"] or "").strip() else None,
+    }
+
+
+def set_note(conn, ticker: str, content: str) -> None:
+    """Upsert the per-ticker note. Empty/whitespace clears it (NULL).
+
+    Bumps note_updated_at only — does not touch `updated_at`, which
+    belongs to list-management writes (`set_list`)."""
+    now = datetime.now().isoformat(timespec="seconds")
+    body = (content or "").strip() or None  # store NULL, not empty string
+    stamp = now if body is not None else None
+    conn.execute(
+        """INSERT INTO watchlist_meta
+               (ticker, list, note, note_updated_at, added_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(ticker) DO UPDATE SET
+               note = excluded.note,
+               note_updated_at = excluded.note_updated_at""",
+        (ticker.upper(), DEFAULT_LIST, body, stamp, now, now),
     )
 
 

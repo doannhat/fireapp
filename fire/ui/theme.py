@@ -1839,6 +1839,126 @@ html { scroll-behavior: smooth; }
   .thesis-cards { grid-template-columns: 1fr; }
   .thesis-row-1, .bull-bear { grid-template-columns: 1fr; }
 }
+
+/* ----------  S O U R C E S   (Section 11 — anti-hallucination audit)  ---------- */
+.sources-fingerprint {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+}
+.sources-fingerprint .fp-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  color: var(--text-1);
+}
+.sources-fingerprint .fp-row .fp-kind { color: var(--amber); }
+.sources-fingerprint .fp-row .fp-hash { color: var(--text-3); }
+.sources-fingerprint .fp-empty {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 4px 0;
+}
+
+.sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+.src-row {
+  background: var(--bg-1);
+}
+.src-row[open] { background: var(--bg-2); }
+.src-row > summary {
+  display: grid;
+  grid-template-columns: 24px 1fr auto 18px;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12.5px;
+  color: var(--text-1);
+}
+.src-row > summary::-webkit-details-marker { display: none; }
+.src-row > summary::marker { content: ""; }
+.src-row > summary:hover { background: var(--bg-2); }
+
+.src-row .src-status {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
+  text-align: center;
+}
+.src-row .src-status.ok    { color: var(--pos); }
+.src-row .src-status.empty { color: var(--text-3); }
+
+.src-row .src-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.src-row .src-label .lbl {
+  color: var(--text-0);
+  font-weight: 500;
+}
+.src-row .src-label .prov {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  color: var(--text-3);
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.src-row .src-summary {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+.src-row .src-summary.empty { color: var(--text-3); }
+
+.src-row .src-chev {
+  color: var(--text-3);
+  font-size: 10px;
+  transition: transform 0.15s ease;
+  text-align: center;
+}
+.src-row[open] .src-chev { transform: rotate(180deg); }
+
+.src-row .src-raw {
+  padding: 10px 14px 14px;
+  background: var(--bg-0);
+  border-top: 1px solid var(--line);
+}
+.src-row .src-raw pre {
+  margin: 0;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 480px;
+  overflow-y: auto;
+}
+.src-row .src-raw .empty-hint {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--text-3);
+  font-style: italic;
+}
 """
 
 

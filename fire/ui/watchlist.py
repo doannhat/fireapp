@@ -25,6 +25,7 @@ from ..edgar import search_filings
 from ..market import fetch_snapshot
 from .list_picker import add_ticker as _add_ticker_shared
 from .list_picker import render_list_picker
+from .notes import render_notes_popover
 
 
 LIST_ACCENT_CLASS = {
@@ -99,7 +100,7 @@ def _render_card(ticker: str, list_name: str, snap: dict):
             </div>
             """
         )
-        action_cols = st.columns([2, 3])
+        action_cols = st.columns([2, 3, 1])
         with action_cols[0]:
             if st.button("◇ open", key=f"open_{list_name}_{ticker}",
                          use_container_width=True):
@@ -111,6 +112,12 @@ def _render_card(ticker: str, list_name: str, snap: dict):
             render_list_picker(
                 ticker,
                 key_prefix=f"wl_picker_{list_name}",
+            )
+        with action_cols[2]:
+            render_notes_popover(
+                ticker,
+                key=f"notes_wl_{list_name}_{ticker}",
+                compact=True,
             )
 
 

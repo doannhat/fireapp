@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
@@ -25,6 +26,7 @@ import yfinance as yf
 
 from .. import db
 from ..claude_cli import Claude, ClaudeResult
+from ..strategy import load_strategy
 
 # Per-call body trim sent to the prompt. Storage keeps ~12KB; the
 # prompt blob keeps only the densest leading slice of each transcript.
@@ -789,6 +791,296 @@ def _data_blob(snapshot: dict, sections: dict, sentiment: dict,
                 lines.append(f"  | {ln}")
 
     return "\n".join(lines)
+
+
+# ----------------------------------------------------------------------
+# Source-audit accessor — what Claude actually saw.
+#
+# `gather_source_rows()` returns a structured list of every data source
+# fed into the thesis prompt, paired with the EXACT raw lines that
+# source contributed to the blob. The Research-tab "Sources" section
+# renders this so the user can verify Claude isn't fabricating numbers
+# in the executive summary.
+#
+# NOTE: this MUST stay in lock-step with `_data_blob()` above. The raw
+# lines come from re-parsing the blob, so adding a new block in
+# `_data_blob` without adding a matching row here will surface as a
+# silently missing source in the UI.
+# ----------------------------------------------------------------------
+@dataclass
+class SourceRow:
+    """One data source fed to Claude when building the thesis.
+
+    `raw_lines` is the EXACT slice of `_data_blob()` output that this
+    source contributed — so the user can see byte-for-byte what
+    Claude was given for this category.
+    """
+    id: str
+    label: str
+    provider: str
+    present: bool
+    summary: str
+    raw_lines: list = field(default_factory=list)
+
+
+def _split_data_blob_into_blocks(blob: str) -> dict:
+    """Parse `_data_blob()` output into `{header: [lines]}`.
+
+    Each `[BLOCK NAME ...]` line opens a new block. Everything before
+    the first bracketed header lands in `"__preamble__"`. The header
+    key is the uppercased first token before ` · ` (so
+    `[INSIDER ACTIVITY · last 180 days · OpenInsider]` -> `INSIDER
+    ACTIVITY`).
+    """
+    blocks: dict = {"__preamble__": []}
+    current = "__preamble__"
+    for line in blob.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("[") and "]" in stripped:
+            inner = stripped[1:stripped.index("]")]
+            current = inner.split(" · ")[0].strip().upper()
+            blocks.setdefault(current, [])
+        blocks.setdefault(current, []).append(line)
+    return blocks
+
+
+def gather_source_rows(snapshot: dict, sections: dict, sentiment: dict,
+                       extras: dict) -> list:
+    """Structured roster of every data source Claude was given for this
+    thesis, paired with the exact lines each source put into the prompt
+    blob. Empty sources still appear in the list (with `present=False`
+    and `raw_lines=[]`) so the UI can show what was missing.
+    """
+    blob = _data_blob(snapshot, sections, sentiment, extras)
+    blocks = _split_data_blob_into_blocks(blob)
+
+    def lines_for(*headers: str) -> list:
+        """Concatenate lines for one or more block headers, dropping
+        leading blanks that come from the `\\n[HEADER]` joiner."""
+        out: list = []
+        for h in headers:
+            chunk = list(blocks.get(h) or [])
+            if not out:
+                while chunk and chunk[0].strip() == "":
+                    chunk.pop(0)
+            out.extend(chunk)
+        return out
+
+    snap = snapshot or {}
+    info = extras.get("info") or {}
+    rows: list = []
+
+    # 1. Market snapshot — price, sector, business desc, leadership.
+    snap_lines = lines_for("__preamble__", "BUSINESS DESCRIPTION",
+                           "LEADERSHIP")
+    parts: list = []
+    if snap.get("name"):
+        parts.append(str(snap["name"]))
+    if snap.get("sector"):
+        parts.append(str(snap["sector"]))
+    if snap.get("price") is not None:
+        parts.append(f"${snap['price']:.2f}")
+    rows.append(SourceRow(
+        id="snapshot",
+        label="Market snapshot",
+        provider="yfinance · .info",
+        present=bool(snap.get("ticker") or snap.get("name")),
+        summary=" · ".join(parts) if parts else "empty",
+        raw_lines=snap_lines,
+    ))
+
+    # 2. Analyst consensus — price targets, rating distribution.
+    pt = info.get("targetMeanPrice")
+    n_an = info.get("numberOfAnalystOpinions")
+    if pt and n_an:
+        analyst_summary = f"PT ${pt:.0f} · {n_an} analysts"
+    elif pt:
+        analyst_summary = f"PT ${pt:.0f}"
+    elif info.get("recommendationKey"):
+        analyst_summary = info["recommendationKey"]
+    else:
+        analyst_summary = "empty"
+    rows.append(SourceRow(
+        id="analysts",
+        label="Analyst consensus",
+        provider="yfinance · .info (analyst targets + rating dist)",
+        present=bool(pt or info.get("recommendationKey")),
+        summary=analyst_summary,
+        raw_lines=lines_for("ANALYST CONSENSUS"),
+    ))
+
+    # 3. KPI sections — local computation from yfinance fundamentals.
+    kpi_headers = ("OVERVIEW", "VALUATION", "GROWTH", "QUALITY", "HEALTH",
+                   "AI", "INCOME", "FINE")
+    n_kpi_sections = sum(1 for h in kpi_headers if blocks.get(h))
+    rows.append(SourceRow(
+        id="kpis",
+        label="KPI sections",
+        provider="computed locally · yfinance fundamentals",
+        present=n_kpi_sections > 0,
+        summary=(f"{n_kpi_sections} sections" if n_kpi_sections
+                 else "empty"),
+        raw_lines=lines_for(*kpi_headers),
+    ))
+
+    # 4. Top institutional holders (yfinance Holders endpoint).
+    ih = extras.get("inst_holders") or []
+    rows.append(SourceRow(
+        id="yf_holders",
+        label="Top institutional holders",
+        provider="yfinance · Holders",
+        present=bool(ih),
+        summary=f"{len(ih)} holders" if ih else "empty",
+        raw_lines=lines_for("TOP INSTITUTIONAL HOLDERS"),
+    ))
+
+    # 5. Earnings history (beats / misses streak, next earnings date).
+    streak = extras.get("earnings_streak") or []
+    if streak:
+        beats = sum(1 for r in streak
+                    if isinstance(r.get("surprise_pct"), (int, float))
+                    and r["surprise_pct"] > 0)
+        misses = sum(1 for r in streak
+                     if isinstance(r.get("surprise_pct"), (int, float))
+                     and r["surprise_pct"] < 0)
+        earnings_summary = (f"{len(streak)}Q · {beats} beats / "
+                            f"{misses} misses")
+    else:
+        earnings_summary = "empty"
+    rows.append(SourceRow(
+        id="earnings",
+        label="Earnings history",
+        provider="yfinance · SQLite earnings table",
+        present=bool(streak),
+        summary=earnings_summary,
+        raw_lines=lines_for("EARNINGS HISTORY"),
+    ))
+
+    # 6. Recent SEC filings (EDGAR full-text-indexed).
+    filings = extras.get("filings_recent") or []
+    rows.append(SourceRow(
+        id="filings",
+        label="Recent SEC filings",
+        provider="EDGAR · SQLite filings table · last 120d",
+        present=bool(filings),
+        summary=(f"{len(filings)} filings" if filings else "empty"),
+        raw_lines=lines_for("RECENT SEC FILINGS"),
+    ))
+
+    # 7. Sentiment aggregate (Reddit + StockTwits + news + HN).
+    sent = sentiment or {}
+    counts = sent.get("counts") or {}
+    total_posts = sum(int(v or 0) for v in counts.values())
+    sent_present = bool(total_posts or sent.get("current") is not None)
+    if sent_present:
+        sent_summary = f"{total_posts} posts · 30d window"
+        if sent.get("delta") is not None:
+            sent_summary += f" · shift {sent['delta']:+.2f}"
+    else:
+        sent_summary = "empty"
+    rows.append(SourceRow(
+        id="sentiment",
+        label="Sentiment aggregate",
+        provider="Reddit · StockTwits · news · HN · 30d",
+        present=sent_present,
+        summary=sent_summary,
+        raw_lines=lines_for("SENTIMENT"),
+    ))
+
+    # 8. Insider activity (OpenInsider) + Form 4 mechanical/discretionary
+    # breakdown (EDGAR Form 4 parsing).
+    ins_sum = extras.get("insider_summary") or {}
+    ins_count = (ins_sum.get("buy_n") or 0) + (ins_sum.get("sell_n") or 0)
+    f4 = extras.get("form4_breakdown") or {}
+    f4_present = (
+        (f4.get("discretionary_buy_n") or 0)
+        + (f4.get("discretionary_sell_n") or 0)
+        + (f4.get("plan_sell_n") or 0)
+    ) > 0
+    if ins_count and f4_present:
+        ins_summary = f"{ins_count} txns · Form 4 breakdown · 180d"
+    elif ins_count:
+        ins_summary = f"{ins_count} txns · 180d"
+    elif f4_present:
+        ins_summary = "Form 4 breakdown only · 180d"
+    else:
+        ins_summary = "empty"
+    rows.append(SourceRow(
+        id="insider",
+        label="Insider activity",
+        provider="OpenInsider · EDGAR Form 4 · last 180d",
+        present=bool(ins_count) or f4_present,
+        summary=ins_summary,
+        raw_lines=lines_for("INSIDER ACTIVITY", "FORM 4 BREAKDOWN"),
+    ))
+
+    # 9. 13F institutional holders (EDGAR, curated holder CIK list).
+    db_holders = extras.get("institutional_holdings_db") or []
+    period = (db_holders[0].get("period_end") if db_holders else None) or ""
+    rows.append(SourceRow(
+        id="thirteenf",
+        label="13F institutional holders",
+        provider="EDGAR · curated holder CIK list",
+        present=bool(db_holders),
+        summary=(f"{len(db_holders)} holders · {period}"
+                 if db_holders else "empty"),
+        raw_lines=lines_for("13F INSTITUTIONAL HOLDERS"),
+    ))
+
+    # 10. Valuation history (P/B, P/S, P/E by year).
+    vh = extras.get("valuation_history") or []
+    rows.append(SourceRow(
+        id="val_history",
+        label="Valuation history",
+        provider="stockanalysis.com · annual",
+        present=bool(vh),
+        summary=f"{len(vh)} years" if vh else "empty",
+        raw_lines=lines_for("VALUATION HISTORY"),
+    ))
+
+    # 11. Activist filings (SC 13D / 13G, last 365d).
+    activists = extras.get("activist_filings") or []
+    rows.append(SourceRow(
+        id="activists",
+        label="Activist filings",
+        provider="EDGAR · SC 13D / 13G · last 365d",
+        present=bool(activists),
+        summary=(f"{len(activists)} filings" if activists else "empty"),
+        raw_lines=lines_for("ACTIVIST FILINGS"),
+    ))
+
+    # 12. Earnings call transcripts (prepared remarks, ~2500 chars each).
+    transcripts = extras.get("transcripts") or []
+    rows.append(SourceRow(
+        id="transcripts",
+        label="Earnings call transcripts",
+        provider=(f"transcripts source · prepared remarks "
+                  f"(~{_TRANSCRIPT_PROMPT_SLICE} chars/call)"),
+        present=bool(transcripts),
+        summary=(f"{len(transcripts)} calls" if transcripts
+                 else "empty"),
+        raw_lines=lines_for("EARNINGS CALL COMMENTARY"),
+    ))
+
+    # 13. Investor strategy (STRATEGY.md). Not in the data blob —
+    # prepended to every Claude prompt as a `<investor-strategy>` block.
+    strategy_text = ""
+    try:
+        strategy_text = load_strategy().as_prompt()
+    except Exception:
+        strategy_text = ""
+    strategy_lines = (strategy_text.split("\n") if strategy_text else [])
+    rows.append(SourceRow(
+        id="strategy",
+        label="Investor strategy",
+        provider="STRATEGY.md · system prompt for every Claude call",
+        present=bool(strategy_text),
+        summary=(f"{len(strategy_lines)} lines"
+                 if strategy_text else "empty"),
+        raw_lines=strategy_lines,
+    ))
+
+    return rows
 
 
 # ----------------------------------------------------------------------

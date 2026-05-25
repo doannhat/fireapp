@@ -58,6 +58,41 @@ def test_list_round_trip():
         assert "TESTTKR" not in db.get_lists(c)
 
 
+def test_note_round_trip():
+    """set_note / get_note — save, clear, and isolation from set_list."""
+    from fire import db
+
+    db.init_db()
+    with db.connect() as c:
+        # Empty state for an untouched ticker.
+        empty = db.get_note(c, "NOTETKR")
+        assert empty["content"] == ""
+        assert empty["updated_at"] is None
+
+        # Save a note.
+        db.set_note(c, "NOTETKR", "hello world")
+        got = db.get_note(c, "NOTETKR")
+        assert got["content"] == "hello world"
+        assert got["updated_at"] is not None
+        # Sanity-check ISO format.
+        from datetime import datetime
+        datetime.fromisoformat(got["updated_at"])
+
+        # set_list must NOT bump note_updated_at.
+        before = got["updated_at"]
+        db.set_list(c, "NOTETKR", "shortlist")
+        after = db.get_note(c, "NOTETKR")
+        assert after["updated_at"] == before
+
+        # Clearing the note nulls the timestamp.
+        db.set_note(c, "NOTETKR", "   ")  # whitespace also clears
+        cleared = db.get_note(c, "NOTETKR")
+        assert cleared["content"] == ""
+        assert cleared["updated_at"] is None
+
+        db.remove_ticker_meta(c, "NOTETKR")
+
+
 def test_claude_cache_round_trip():
     """save_claude_cache / get_claude_cache / recent_claude_activity."""
     from fire import db
@@ -84,6 +119,8 @@ if __name__ == "__main__":
     print("research data ok")
     test_list_round_trip()
     print("list round-trip ok")
+    test_note_round_trip()
+    print("note round-trip ok")
     test_claude_cache_round_trip()
     print("claude cache round-trip ok")
     test_app_renders()
